@@ -1,204 +1,143 @@
 import numpy as np
 
 def loudness_function_bh2002(x, fitparams, inverse=False):
-    '''
-    fit = loudness_function_bh2002(x, fitparams, inverse)
+    """
+    Loudness mapping using a piecewise linear + quadratic Bezier transition.
 
-    function calculates the loudness function according to fitparams
+    Args:
+        x: array-like; levels (forward) or CU values (inverse).
+        fitparams: [Lcut, m_low, m_high], slopes in CU/dB.
+        inverse: False for level->CU, True for CU->level.
 
-    PARAMETERS:
-        x:
-        either levels to calculate CU
-        if inverse = true, x contains CU and calculates levels
-        fitparams:
-        fitparams =[lcut, mlow, mhigh]
-        mlow and mhigh have to be positive values
-        if negative values are given, the absolute value will be used.
-        the smallest value for mlow and mhigh is set to 0.001 CU/dB
-        inverse:
-            activates the inverse loudness function
-
-    OUTPUT:
-        y:
-            either CU (inverse=false) or levels (inverse=true)
-    Authors: Dirk Oetting, SE 16.05.2013 16:27, DO/SE 24.07.2013
-
-    includes DO fixes
-
-    ------------------------------------------------------------------------------
-    Adaptive Categorical Loudness Scaling Procedure for AFC for Mathwork's MATLAB
-
-    Author(s): Stephan Ewert, Dirk Oetting
-
-    Copyright (c) 2013-2014, Stephan Ewert, Dirk Oetting
-    All rights reserved.
-
-    This work is licensed under the 
-    Creative Commons Attribution-NonCommercial-NoDerivs 4.0 International License (CC BY-NC-ND 4.0). 
-    To view a copy of this license, visit
-    http://creativecommons.org/licenses/by-nc-nd/4.0/ or send a letter to Creative
-    Commons, 444 Castro Street, Suite 900, Mountain View, California, 94041, USA.
-    ------------------------------------------------------------------------------
-    '''
-    # x=np.array([x])
-    # x=np.array(x)
-    if type(x)==int:
-        x=np.array([x])
-    elif type(x)==list:
-        x=np.array([x]).flatten()
-    elif type(x)==np.ndarray:
-        x=x.flatten()
-
-
+    Returns:
+        np.ndarray of mapped values (same shape as input).
+    """
+    x = _as_1d_array(x)
     if len(fitparams) != 3:
-        raise ValueError("fitparams should contain exactly three values.")
-    
-    Lcut, m_lo, m_hi = fitparams
-    
-    # Check values of given parameters
-    if m_lo <= 0:
-        if m_lo == 0:
-            m_lo = 0.001
-        elif m_lo < 0:
-            m_lo = -m_lo
-    
-    if m_hi <= 0:
-        if m_hi == 0:
-            m_hi = 0.001
-        elif m_hi < 0:
-            m_hi = -m_hi
-    
-    # Calculate point where Bezier function should go through
-    L15 = y2x_lin(15, Lcut, 25, m_lo)
-    L35 = y2x_lin(35, Lcut, 25, m_hi)
-    C = np.array([[L15, Lcut, L35], [15, 25, 35]])
-    
-    # failed flag
-    failed = 0
-    
+        raise ValueError("fitparams must be [Lcut, m_low, m_high]")
+
+    Lcut, m_low, m_high = fitparams
+    m_low = _ensure_positive(m_low)
+    m_high = _ensure_positive(m_high)
+
+    # Endpoints for CU=15 and CU=35
+    L15 = _y_to_x_linear(15.0, Lcut, 25.0, m_low)
+    L35 = _y_to_x_linear(35.0, Lcut, 25.0, m_high)
+
+    # Control point chosen to match slopes at both ends (C1 continuity)
+    denom = (m_low - m_high) if not np.isclose(m_low, m_high) else 1e-9
+    x1 = (20.0 - m_high * L35 + m_low * L15) / denom
+    x1 = np.clip(x1, min(L15, L35) + 1e-6, max(L15, L35) - 1e-6)
+    y1 = 15.0 + m_low * (x1 - L15)
+
+    control = np.array([[L15, x1, L35], [15.0, y1, 35.0]])
+
     if not inverse:
-        cu = np.ones_like(x) * np.nan
-        
-        if m_lo == m_hi:
-            cu = x2y_lin(x, Lcut, 25, m_lo)
+        return _forward_level_to_cu(x, Lcut, m_low, m_high, control)
+    return _inverse_cu_to_level(x, Lcut, m_low, m_high, control)
+
+
+# ---------- helpers ----------
+
+def _as_1d_array(x):
+    if isinstance(x, np.ndarray):
+        return x.flatten()
+    return np.array(x, dtype=float).flatten()
+
+def _ensure_positive(val, floor=1e-3):
+    if val <= 0:
+        return max(floor, abs(val))
+    return val
+
+def _x_to_y_linear(x, x0, y0, slope):
+    return y0 + slope * (x - x0)
+
+def _y_to_x_linear(y, x0, y0, slope):
+    return (y - y0) / slope + x0
+
+def _quadratic_bezier_t_for_x(x, control):
+    """
+    Solve x(t) = (1-t)^2*P0 + 2(1-t)t*P1 + t^2*P2 for t in [0,1].
+    Returns (t_values, fail_flag).
+    """
+    x0, x1, x2 = control[0]
+    a = x0 - 2 * x1 + x2
+    b = 2 * (x1 - x0)
+    c = x0 - x
+    if np.isclose(a, 0):
+        t = -c / b
+        return np.clip(t, 0.0, 1.0), False
+
+    disc = b * b - 4 * a * c
+    if np.any(disc < 0):
+        return np.zeros_like(x), True
+
+    sqrt_disc = np.sqrt(disc)
+    t1 = (-b + sqrt_disc) / (2 * a)
+    t2 = (-b - sqrt_disc) / (2 * a)
+
+    # pick root closest to linear guess
+    t_lin = np.clip((x - x0) / (x2 - x0 + 1e-12), 0.0, 1.0)
+    candidates = np.stack([t1, t2], axis=-1)
+    valid = (candidates >= 0) & (candidates <= 1)
+    dist = np.abs(candidates - t_lin[..., None])
+    dist[~valid] = np.inf
+    t = candidates[np.arange(len(t1)), np.argmin(dist, axis=-1)]
+    fail = np.any(~valid.any(axis=-1)) | np.isnan(t).any()
+    return t, fail
+
+def _quadratic_bezier(control, t):
+    P0, P1, P2 = control.T
+    return (1 - t) ** 2 * P0 + 2 * (1 - t) * t * P1 + t ** 2 * P2
+
+def _forward_level_to_cu(levels, Lcut, m_low, m_high, control):
+    cu = np.empty_like(levels, dtype=float)
+
+    below = levels <= control[0, 0]
+    above = levels >= control[0, 2]
+    mid = ~(below | above)
+
+    cu[below] = _x_to_y_linear(levels[below], Lcut, 25.0, m_low)
+    cu[above] = _x_to_y_linear(levels[above], Lcut, 25.0, m_high)
+
+    if np.any(mid):
+        t, fail = _quadratic_bezier_t_for_x(levels[mid], control)
+        if fail:
+            raise RuntimeError("Bezier inversion failed in forward mapping")
+        cu[mid] = _quadratic_bezier(control[1], t)
+
+    return np.clip(cu, 0.0, 50.0)
+
+def _inverse_cu_to_level(cu, Lcut, m_low, m_high, control):
+    cu_clipped = np.clip(cu, 0.0, 50.0)
+    levels = np.empty_like(cu_clipped, dtype=float)
+
+    below = cu_clipped <= control[1, 0]
+    above = cu_clipped >= control[1, 2]
+    mid = ~(below | above)
+
+    levels[below] = _y_to_x_linear(cu_clipped[below], Lcut, 25.0, m_low)
+    levels[above] = _y_to_x_linear(cu_clipped[above], Lcut, 25.0, m_high)
+
+    if np.any(mid):
+        y0, y1, y2 = control[1]
+        a = y0 - 2 * y1 + y2
+        b = 2 * (y1 - y0)
+        c = y0 - cu_clipped[mid]
+        if np.isclose(a, 0).all():
+            t = -c / b
         else:
-            # Calculate all values below Lcut
-            idx = x <= Lcut
-            cu[idx] = x2y_lin(x[idx], Lcut, 25, m_lo)
-            
-            # Find all values above Lcut
-            idx = x > Lcut
-            cu[idx] = x2y_lin(x[idx], Lcut, 25, m_hi)
-            
-            # Calculate transition range between 15 and 35 CU
-            idx = (cu > 15) & (cu < 35)
-            
-            if np.any(idx):
-                cu[idx], failed = bezier_x2y_for_3_control_points(x[idx], C)
-        
-        if failed:
-            y = np.array([])
-            return y
-        
-        # Limit to 0 to 50
-        cu = np.clip(cu, 0, 50)
-        y = cu
-    else:
-        # Limit x from 0 to 50
-        x = np.clip(x, 0, 50)
-        
-        if m_lo == m_hi:
-            y = y2x_lin(x, Lcut, 25, m_hi)
-        else:
-            levels = np.ones_like(x) * np.nan
-            
-            # Find all values below CU = 15 
-            # idx = x <= 15 np.array(b, dtype=int)
+            disc = b * b - 4 * a * c
+            disc[disc < 0] = 0
+            sqrt_disc = np.sqrt(disc)
+            t1 = (-b + sqrt_disc) / (2 * a)
+            t2 = (-b - sqrt_disc) / (2 * a)
+            candidates = np.stack([t1, t2], axis=-1)
+            valid = (candidates >= 0) & (candidates <= 1)
+            t = np.where(valid.any(axis=-1), candidates[..., 0], np.nan)
+            t = np.where(valid[..., 1], candidates[..., 1], t)
+            if np.isnan(t).any():
+                raise RuntimeError("Bezier inversion failed in inverse mapping")
+        levels[mid] = _quadratic_bezier(control[0], t)
 
-            idx=np.where(x <= 15)[0]
-            levels[idx] = y2x_lin(x[idx], Lcut, 25, m_lo)
-            # if len(x[idx]) > 1:
-            #     levels[idx] = y2x_lin(x[idx], Lcut, 25, m_lo)
-            # elif len(x[idx]) == 1:
-            #     levels = y2x_lin(x[idx], Lcut, 25, m_lo)
-            
-            # Find all values above CU = 35
-            # idx = x >= 35
-            idx=np.where(x >= 35)
-            levels[idx] = y2x_lin(x[idx], Lcut, 25, m_hi)
-            # if len(x[idx]) > 1:
-            #     levels[idx] = y2x_lin(x[idx], Lcut, 25, m_hi)
-            # elif len(x[idx]) == 1:
-            #     levels= y2x_lin(x[idx], Lcut, 25, m_hi)
-            
-            # Calculate transition range between 15 and 35 CU
-            idx = (x > 15) & (x < 35)
-            
-            if np.any(idx):
-                levels[idx], failed = bezier_x2y_for_3_control_points(x[idx], C, True)
-            
-            if failed:
-                y = np.array([])
-                return y
-            
-            y = levels
-    
-    return y
-
-def x2y_lin(x, x0, y0, m):
-    return y0 + m * (x - x0)
-
-def y2x_lin(y, x0, y0, m):
-    return (y - y0) / m + x0
-
-def bezier_x2y_for_3_control_points(x, C, inverse=False):
-    failed = 0
-
-    # Calculate t of x
-    t = np.nan
-    y = np.zeros_like(x)
-    y0 = C[1, 0]
-    y1 = 2 * C[1, 1] - 2 * C[1, 0]
-    y2 = C[1, 0] - 2 * C[1, 1] + C[1, 2]
-
-    x2 = C[0, 0] - 2 * C[0, 1] + C[0, 2]
-    x1 = 2 * C[0, 1] - 2 * C[0, 0]
-    x0 = C[0, 0]
-
-    if not inverse:
-        # m_low and m_high are not identical
-        if x2 != 0:
-            t1 = (-x1 / (2 * x2) + 0.5 * np.sqrt((x1 / x2) ** 2 - 4 * (x0 - x) / x2))
-            t2 = (-x1 / (2 * x2) - 0.5 * np.sqrt((x1 / x2) ** 2 - 4 * (x0 - x) / x2))
-            
-            # Check if t values are between zero and one
-            if np.any(t1) and np.all(np.imag(t1) == 0) and np.min(t1) >= 0 and np.max(t1) <= 1:
-                t = t1
-            elif np.any(t2) and np.all(np.imag(t2) == 0) and np.min(t2) >= 0 and np.max(t2) <= 1:
-                t = t2
-            else:
-                print("Something strange happens in BezierX2YFor3ControlPoints")
-                failed = 1
-                return y, failed
-        # L_cut ~= L15 should always be the case
-        elif x1 != 0:
-            t = (x - x0) / x1
-        
-    # If inverse
-    else:
-        t = x / y1 - y0 / y1
-    
-    # Calculate y of t
-    idx = (t >= 0) & (t <= 1)
-    if not inverse:
-        y[idx] = y2 * t[idx] ** 2 + y1 * t[idx] + y0
-    else:
-        y[idx] = x2 * ((t + x1 / (2 * x2)) ** 2) - (x1 ** 2) / (4 * x2) + x0
-    
-    return y, failed
-
-# Example usage:
-# x_values = np.linspace(0, 50, 100)
-# fit_params = [25, 0.01, 0.02]
-# result = loudness_function_bh2002(x_values, fit_params)
-# print(result)
+    return levels
