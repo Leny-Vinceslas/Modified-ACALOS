@@ -7,7 +7,7 @@ from scipy.optimize import fmin_slsqp
 from scipy.optimize import fmin_bfgs
 from scipy.optimize import fmin_tnc
 
-def fminsearchConstrained(fun, x0, lb, ub,optAlg, options=None, *args):
+def run_bounded_opt(fun, x0, lb, ub, optAlg, options=None, *args):
     '''Constrained function minimization
 
  Based on fminsearchbnd.m (BSD license)

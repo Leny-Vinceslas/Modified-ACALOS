@@ -1,6 +1,6 @@
 import numpy as np
 
-def loudness_function_bh2002(x, fitparams, inverse=False):
+def evaluate_bh2002_curve(x, fitparams, inverse=False):
     """
     Loudness mapping using a piecewise linear + quadratic Bezier transition.
 
@@ -12,17 +12,17 @@ def loudness_function_bh2002(x, fitparams, inverse=False):
     Returns:
         np.ndarray of mapped values (same shape as input).
     """
-    x = _as_1d_array(x)
+    x = _to_1d_array(x)
     if len(fitparams) != 3:
         raise ValueError("fitparams must be [Lcut, m_low, m_high]")
 
     Lcut, m_low, m_high = fitparams
-    m_low = _ensure_positive(m_low)
-    m_high = _ensure_positive(m_high)
+    m_low = _clip_positive(m_low)
+    m_high = _clip_positive(m_high)
 
     # Endpoints for CU=15 and CU=35
-    L15 = _y_to_x_linear(15.0, Lcut, 25.0, m_low)
-    L35 = _y_to_x_linear(35.0, Lcut, 25.0, m_high)
+    L15 = _linear_y_to_x(15.0, Lcut, 25.0, m_low)
+    L35 = _linear_y_to_x(35.0, Lcut, 25.0, m_high)
 
     # Control point chosen to match slopes at both ends (C1 continuity)
     denom = (m_low - m_high) if not np.isclose(m_low, m_high) else 1e-9
@@ -33,29 +33,29 @@ def loudness_function_bh2002(x, fitparams, inverse=False):
     control = np.array([[L15, x1, L35], [15.0, y1, 35.0]])
 
     if not inverse:
-        return _forward_level_to_cu(x, Lcut, m_low, m_high, control)
-    return _inverse_cu_to_level(x, Lcut, m_low, m_high, control)
+        return _forward_level_to_cu_curve(x, Lcut, m_low, m_high, control)
+    return _inverse_cu_curve(x, Lcut, m_low, m_high, control)
 
 
 # ---------- helpers ----------
 
-def _as_1d_array(x):
+def _to_1d_array(x):
     if isinstance(x, np.ndarray):
         return x.flatten()
     return np.array(x, dtype=float).flatten()
 
-def _ensure_positive(val, floor=1e-3):
+def _clip_positive(val, floor=1e-3):
     if val <= 0:
         return max(floor, abs(val))
     return val
 
-def _x_to_y_linear(x, x0, y0, slope):
+def _linear_x_to_y(x, x0, y0, slope):
     return y0 + slope * (x - x0)
 
-def _y_to_x_linear(y, x0, y0, slope):
+def _linear_y_to_x(y, x0, y0, slope):
     return (y - y0) / slope + x0
 
-def _quadratic_bezier_t_for_x(x, control):
+def _bezier_t_for_x(x, control):
     """
     Solve x(t) = (1-t)^2*P0 + 2(1-t)t*P1 + t^2*P2 for t in [0,1].
     Returns (t_values, fail_flag).
@@ -86,29 +86,29 @@ def _quadratic_bezier_t_for_x(x, control):
     fail = np.any(~valid.any(axis=-1)) | np.isnan(t).any()
     return t, fail
 
-def _quadratic_bezier(control, t):
+def _evaluate_quadratic_bezier(control, t):
     P0, P1, P2 = control.T
     return (1 - t) ** 2 * P0 + 2 * (1 - t) * t * P1 + t ** 2 * P2
 
-def _forward_level_to_cu(levels, Lcut, m_low, m_high, control):
+def _forward_level_to_cu_curve(levels, Lcut, m_low, m_high, control):
     cu = np.empty_like(levels, dtype=float)
 
     below = levels <= control[0, 0]
     above = levels >= control[0, 2]
     mid = ~(below | above)
 
-    cu[below] = _x_to_y_linear(levels[below], Lcut, 25.0, m_low)
-    cu[above] = _x_to_y_linear(levels[above], Lcut, 25.0, m_high)
+    cu[below] = _linear_x_to_y(levels[below], Lcut, 25.0, m_low)
+    cu[above] = _linear_x_to_y(levels[above], Lcut, 25.0, m_high)
 
     if np.any(mid):
-        t, fail = _quadratic_bezier_t_for_x(levels[mid], control)
+        t, fail = _bezier_t_for_x(levels[mid], control)
         if fail:
             raise RuntimeError("Bezier inversion failed in forward mapping")
-        cu[mid] = _quadratic_bezier(control[1], t)
+        cu[mid] = _evaluate_quadratic_bezier(control[1], t)
 
     return np.clip(cu, 0.0, 50.0)
 
-def _inverse_cu_to_level(cu, Lcut, m_low, m_high, control):
+def _inverse_cu_curve(cu, Lcut, m_low, m_high, control):
     cu_clipped = np.clip(cu, 0.0, 50.0)
     levels = np.empty_like(cu_clipped, dtype=float)
 
@@ -116,8 +116,8 @@ def _inverse_cu_to_level(cu, Lcut, m_low, m_high, control):
     above = cu_clipped >= control[1, 2]
     mid = ~(below | above)
 
-    levels[below] = _y_to_x_linear(cu_clipped[below], Lcut, 25.0, m_low)
-    levels[above] = _y_to_x_linear(cu_clipped[above], Lcut, 25.0, m_high)
+    levels[below] = _linear_y_to_x(cu_clipped[below], Lcut, 25.0, m_low)
+    levels[above] = _linear_y_to_x(cu_clipped[above], Lcut, 25.0, m_high)
 
     if np.any(mid):
         y0, y1, y2 = control[1]
@@ -138,6 +138,6 @@ def _inverse_cu_to_level(cu, Lcut, m_low, m_high, control):
             t = np.where(valid[..., 1], candidates[..., 1], t)
             if np.isnan(t).any():
                 raise RuntimeError("Bezier inversion failed in inverse mapping")
-        levels[mid] = _quadratic_bezier(control[0], t)
+        levels[mid] = _evaluate_quadratic_bezier(control[0], t)
 
     return levels

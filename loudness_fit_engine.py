@@ -1,16 +1,16 @@
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.optimize import minimize
-from loudness_function import loudness_function
+from loudness_model_wrapper import evaluate_loudness
 from scipy.optimize import fmin
 from scipy.optimize import fmin_cg
 from scipy.optimize import fmin_slsqp
 from scipy.optimize import fmin_tnc
-from loudness_function_bh2002 import loudness_function_bh2002
-from fminsearchConstrained import fminsearchConstrained
+from core_loudness_curve import evaluate_bh2002_curve
+from bounded_optimizer import run_bounded_opt
 
 '''
-fit = fit_loudness_function(measured_data, fit_mode)
+fit = run_loudness_fit(measured_data, fit_mode)
 
 This implementation fits categorical loudness scaling data using several
 published variants (BY, BX, BTX, BTUX, BTUY, BTPX), with optional optimizer
@@ -27,28 +27,28 @@ It is not part of the original reference software and are not supported by the o
 ------------------------------------------------------------------------------
 '''
 
-def fit_loudness_function(measured_data, fit_mode='BTUX', optAlg='fmin', defaultUpperSlope=1.53):
+def run_loudness_fit(measured_data, fit_mode='BTUX', optAlg='fmin', defaultUpperSlope=1.53):
     fit_mode = fit_mode.upper()
     optAlg = optAlg.upper()
 
     if fit_mode == 'BY':
-        Lcut, m_low, m_high = bh_fit_2001(measured_data, optAlg)
+        Lcut, m_low, m_high = fit_categorical_bh2001(measured_data, optAlg)
         HTL = Lcut - 22.5 * 1 / m_low
         fit = [m_low, HTL, m_high]
     elif fit_mode == 'BX':
-        m_low, HTL, m_high = bezier_fit(measured_data, 'x_v11', optAlg, defaultUpperSlope)
+        m_low, HTL, m_high = fit_bezier_curve(measured_data, 'x_v11', optAlg, defaultUpperSlope)
         fit = [m_low, HTL, m_high]
     elif fit_mode == 'BTX':
-        m_low, HTL, m_high = bezier_fit(measured_data, 'x_v3', optAlg, defaultUpperSlope)
+        m_low, HTL, m_high = fit_bezier_curve(measured_data, 'x_v3', optAlg, defaultUpperSlope)
         fit = [m_low, HTL, m_high]
     elif fit_mode == 'BTUX':
-        m_low, HTL, m_high = bezier_fit(measured_data, 'x_v36', optAlg, defaultUpperSlope)
+        m_low, HTL, m_high = fit_bezier_curve(measured_data, 'x_v36', optAlg, defaultUpperSlope)
         fit = [m_low, HTL, m_high]
     elif fit_mode == 'BTUY':
-        m_low, HTL, m_high = bezier_fit(measured_data, 'y_v36', optAlg, defaultUpperSlope)
+        m_low, HTL, m_high = fit_bezier_curve(measured_data, 'y_v36', optAlg, defaultUpperSlope)
         fit = [m_low, HTL, m_high]
     elif fit_mode == 'BTPX':
-        m_low, HTL, m_high = bezier_fit(measured_data, 'x_v37', optAlg, defaultUpperSlope)
+        m_low, HTL, m_high = fit_bezier_curve(measured_data, 'x_v37', optAlg, defaultUpperSlope)
         fit = [m_low, HTL, m_high]
     else:
         print(f'The fit mode "{fit_mode}" is not available.')
@@ -63,38 +63,38 @@ def fit_loudness_function(measured_data, fit_mode='BTUX', optAlg='fmin', default
     return fit
 
 
-def bh_fit_2001(daten, optAlg):
+def fit_categorical_bh2001(daten, optAlg):
     fitparams_start = [75, 0.35, 0.65]
 
     if optAlg == 'NEL':
-        fitparams = fmin(lambda p: costfc2(p, daten), fitparams_start, disp=False,
+        fitparams = fmin(lambda p: cost_power_weighted(p, daten), fitparams_start, disp=False,
                          xtol=1e-4, ftol=1e-4, maxiter=200 * len(fitparams_start),
                          maxfun=200 * len(fitparams_start), full_output=False)
     elif optAlg == 'CG':
-        fitparams = fmin_cg(lambda p: costfc2(p, daten), fitparams_start, fprime=None,
+        fitparams = fmin_cg(lambda p: cost_power_weighted(p, daten), fitparams_start, fprime=None,
                             gtol=1e-05, epsilon=1.4901161193847656e-08, maxiter=None,
                             full_output=0, disp=1, retall=0, callback=None)
     elif optAlg == 'SLS':
-        fitparams = fmin_slsqp(lambda p: costfc2(p, daten), fitparams_start, eqcons=(), f_eqcons=None,
+        fitparams = fmin_slsqp(lambda p: cost_power_weighted(p, daten), fitparams_start, eqcons=(), f_eqcons=None,
                                ieqcons=(), f_ieqcons=None, bounds=(), fprime=None, fprime_eqcons=None,
                                fprime_ieqcons=None, iter=100, acc=1e-06, iprint=1, disp=None, full_output=0,
                                epsilon=1.4901161193847656e-08, callback=None)
     elif optAlg == 'TNC':
-        fitparams = fmin_tnc(lambda p: costfc2(p, daten), fitparams_start, fprime=None, approx_grad=0,
+        fitparams = fmin_tnc(lambda p: cost_power_weighted(p, daten), fitparams_start, fprime=None, approx_grad=0,
                              bounds=None, epsilon=1e-08, scale=None, offset=None, messages=15,
                              maxCGit=-1, maxfun=None, eta=-1, stepmx=0, accuracy=0, fmin=0, ftol=-1,
                              xtol=-1, pgtol=-1, rescale=-1, disp=None, callback=None)
     elif optAlg == 'TRU':
-        result = minimize(lambda p: costfc2(p, daten), fitparams_start, method='trust-constr')
+        result = minimize(lambda p: cost_power_weighted(p, daten), fitparams_start, method='trust-constr')
         fitparams = result.x
     else:
-        fitparams = fmin(lambda p: costfc2(p, daten), fitparams_start, disp=False)
+        fitparams = fmin(lambda p: cost_power_weighted(p, daten), fitparams_start, disp=False)
 
     Lcut, Mlow, Mhigh = fitparams[0], fitparams[1], fitparams[2]
     return Lcut, Mlow, Mhigh
 
 
-def bezier_fit(daten, mode, optAlg, defaultUpperSlope):
+def fit_bezier_curve(daten, mode, optAlg, defaultUpperSlope):
     pascoe_fit = False
     if mode == 'x_v37':
         pascoe_fit = True
@@ -126,11 +126,11 @@ def bezier_fit(daten, mode, optAlg, defaultUpperSlope):
     maxs = [5, 100, 5]
 
     if mode == 'x_v11':
-        optFn = lambda p, d: costfcn_bezier_x(p, d, False, True)
+        optFn = lambda p, d: cost_bezier_x(p, d, False, True)
     elif mode == 'y_v11':
-        optFn = lambda p, d: costfcn_bezier_y(p, d)
+        optFn = lambda p, d: cost_bezier_y(p, d)
     elif mode[1:4] == '_v3':
-        optFn = lambda p, d: costfc_psychometric(p, d)
+        optFn = lambda p, d: cost_psychometric(p, d)
         searchOptions = {'disp': False}
         fitparams_start = [0.5, 0]
         mins_htl = [0.4, -30]
@@ -146,7 +146,7 @@ def bezier_fit(daten, mode, optAlg, defaultUpperSlope):
             maxs[1] = estimated_htl + range_of_htl
         else:
             daten_htl = np.array([htl_levels, htl_probability]).flatten(order='F')
-            result, feval = fminsearchConstrained(optFn, fitparams_start, mins_htl, maxs_htl, optAlg, searchOptions, daten_htl)
+            result, feval = run_bounded_opt(optFn, fitparams_start, mins_htl, maxs_htl, optAlg, searchOptions, daten_htl)
             fitparams = result
             estimated_htl = fitparams[1]
             if min(htl_levels) < estimated_htl < max(htl_levels):
@@ -167,9 +167,9 @@ def bezier_fit(daten, mode, optAlg, defaultUpperSlope):
                 print(f'Fitting method BTUX: not enough data points in the upper loudness range. m_high was fixed to {mins[2]} CU/dB')
 
         if mode[0] == 'x':
-            optFn = lambda p, d: costfcn_bezier_x(p, d, True, True)
+            optFn = lambda p, d: cost_bezier_x(p, d, True, True)
         elif mode[0] == 'y':
-            optFn = lambda p, d: costfcn_bezier_y(p, d)
+            optFn = lambda p, d: cost_bezier_y(p, d)
     else:
         daten = np.array([levels_dB, cu]).flatten(order='F')
 
@@ -192,7 +192,7 @@ def bezier_fit(daten, mode, optAlg, defaultUpperSlope):
                 fitparams_start[2] = mins[2] + (maxs[2] - mins[2]) * 0.1
 
         searchOptions = {'disp': False}
-        result, feval = fminsearchConstrained(optFn, fitparams_start, mins, maxs, optAlg, searchOptions, daten)
+        result, feval = run_bounded_opt(optFn, fitparams_start, mins, maxs, optAlg, searchOptions, daten)
         fitparams[ik, :] = result
         error_x[ik] = feval
 
@@ -202,18 +202,18 @@ def bezier_fit(daten, mode, optAlg, defaultUpperSlope):
     if pascoe_fit:
         re_fit = False
         MaxUCL = 140
-        if loudness_function(50, fit_params, True) > MaxUCL:
+        if evaluate_loudness(50, fit_params, True) > MaxUCL:
             UCL = MaxUCL
             re_fit = True
         if fit_params[2] < 0.25 or np.sum(cu_all >= 35) < 4:
-            UCL = PascoeUCL(fit_params[1])
+            UCL = estimate_pascoe_ucl(fit_params[1])
             re_fit = True
         if re_fit:
             mins[2] = UCL
             maxs[2] = mins[2]
             max_Lcut = UCL - 5 / 25
             mins[0] = 22.5 / (max_Lcut - mins[1])
-            result, feval = fminsearchConstrained(optFn, fitparams_start, mins, maxs, optAlg, searchOptions, daten)
+            result, feval = run_bounded_opt(optFn, fitparams_start, mins, maxs, optAlg, searchOptions, daten)
             fit_params = result
             print('Fitting method BTUX: re-fit using UCL estimation of Pascoe (1988)')
             b = 2.5 - fit_params[0] * fit_params[1]
@@ -228,14 +228,14 @@ def bezier_fit(daten, mode, optAlg, defaultUpperSlope):
     return m_low, HTL, m_high
 
 
-def costfc2(fitparams, daten):
+def cost_power_weighted(fitparams, daten):
     level = np.array(daten[0::2])
     cu = np.array(daten[1::2])
 
-    cu_fit = loudness_function_bh2002(level, fitparams)
+    cu_fit = evaluate_bh2002_curve(level, fitparams)
 
-    x2 = loudness_function_bh2002(50, fitparams, True)
-    x0 = loudness_function_bh2002(0, fitparams, True)
+    x2 = evaluate_bh2002_curve(50, fitparams, True)
+    x0 = evaluate_bh2002_curve(0, fitparams, True)
 
     cu_fit[level < x0] = fitparams[1] * (level[level < x0] - x0)
     cu_fit[level > x2] = fitparams[2] * (level[level > x2] - x2) + 50
@@ -247,29 +247,29 @@ def costfc2(fitparams, daten):
     return np.sum(delta_x ** 2)
 
 
-def psychometric_function(fitparams, x):
+def psychometric_curve(fitparams, x):
     slope = fitparams[0]
     threshold = fitparams[1]
     return 1 / (1 + np.exp(-slope * (x - threshold)))
 
 
-def costfc_psychometric(fitparams, x):
+def cost_psychometric(fitparams, x):
     daten = x
     level = daten[0::2]
     probability = daten[1::2]
-    psychometric_fit = psychometric_function(fitparams, level)
+    psychometric_fit = psychometric_curve(fitparams, level)
     return np.sum((psychometric_fit - probability) ** 2)
 
 
-def costfcn_bezier_y(fitparams, x):
+def cost_bezier_y(fitparams, x):
     daten = x
     level = daten[0::2]
     cu = daten[1::2]
 
-    cu_fit = loudness_function(level, fitparams)
+    cu_fit = evaluate_loudness(level, fitparams)
 
-    x2 = loudness_function(50, fitparams, True)
-    x0 = loudness_function(0, fitparams, True)
+    x2 = evaluate_loudness(50, fitparams, True)
+    x0 = evaluate_loudness(0, fitparams, True)
 
     cu_fit[level < x0] = fitparams[1] * (level[level < x0] - x0)
     cu_fit[level > x2] = fitparams[2] * (level[level > x2] - x2) + 50
@@ -281,7 +281,7 @@ def costfcn_bezier_y(fitparams, x):
     return np.sum(delta_x ** 2),
 
 
-def costfcn_bezier_x(fitparams, x, weighting=False, limit_50=True, outliner_range=40):
+def cost_bezier_x(fitparams, x, weighting=False, limit_50=True, outliner_range=40):
     if len(x) < 5:
         outliner_range = 40
     if len(x) < 4:
@@ -294,10 +294,10 @@ def costfcn_bezier_x(fitparams, x, weighting=False, limit_50=True, outliner_rang
     level = np.array(daten[0::2])
     cu = np.array(daten[1::2])
 
-    level_fit = loudness_function(cu, fitparams, True)
+    level_fit = evaluate_loudness(cu, fitparams, True)
     delta_x = level_fit - level
 
-    cus = loudness_function([0, 50], fitparams, True)
+    cus = evaluate_loudness([0, 50], fitparams, True)
     cu0_level = cus[0]
     UCL = cus[1]
 
@@ -328,7 +328,7 @@ def costfcn_bezier_x(fitparams, x, weighting=False, limit_50=True, outliner_rang
     return np.sum(delta_x ** 2)
 
 
-def PascoeUCL(HTL, mode='smoothed'):
+def estimate_pascoe_ucl(HTL, mode='smoothed'):
     if mode == 'smoothed':
         UCLverHTL = np.array([[-100, 100], [40, 100], [120, 140]])
     return np.interp(HTL, UCLverHTL[:, 0], UCLverHTL[:, 1])

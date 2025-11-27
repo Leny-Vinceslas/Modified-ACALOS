@@ -1,6 +1,6 @@
-from loudness_function_bh2002 import loudness_function_bh2002
+from core_loudness_curve import evaluate_bh2002_curve
 
-def loudness_function(x, fitparams, inverse=False):
+def evaluate_loudness(x, fitparams, inverse=False):
     """
     Wrapper allowing [m_low, HTL, m_high, (optional UCL)] parametrization.
     """
@@ -20,13 +20,13 @@ def loudness_function(x, fitparams, inverse=False):
     else:
         m_high = fitparams[2]
 
-    return loudness_function_bh2002(x, [Lcut, m_low, m_high], inverse)
+    return evaluate_bh2002_curve(x, [Lcut, m_low, m_high], inverse)
 
 
-def loudness_function_Lcut(x, fitparams, inverse=False):
+def evaluate_loudness_fixed_lcut(x, fitparams, inverse=False):
     """
     Variant that accepts [Lcut, m_low, m_high] directly.
     """
     if len(fitparams) != 3:
         raise ValueError("fitparams must be [Lcut, m_low, m_high]")
-    return loudness_function_bh2002(x, fitparams, inverse)
+    return evaluate_bh2002_curve(x, fitparams, inverse)

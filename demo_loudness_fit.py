@@ -1,12 +1,12 @@
-# Example_pyScript.py
+# demo_loudness_fit.py
 # This script demonstrates fitting loudness functions using both BTUX and BTX models
 
 # Import necessary libraries
 import numpy as np
 import matplotlib.pyplot as plt
 
-from fit_loudness_function import fit_loudness_function
-from loudness_function import loudness_function_Lcut
+from loudness_fit_engine import run_loudness_fit
+from loudness_model_wrapper import evaluate_loudness_fixed_lcut
 
 # Helper function to truncate data at 50 CU
 def truncate_to_50_cu(x_vals, y_vals):
@@ -41,15 +41,15 @@ measured_data_jittered[1::2] = cu
 # -----------------------------
 # 2. Fit Using Both BTUX and BTX
 # -----------------------------
-params_btux = fit_loudness_function(measured_data_jittered, fit_mode="BTUX", optAlg="NEL", defaultUpperSlope=1.39)
-params_btx = fit_loudness_function(measured_data_jittered, fit_mode="BTX", optAlg="NEL", defaultUpperSlope=1.39)
+params_btux = run_loudness_fit(measured_data_jittered, fit_mode="BTUX", optAlg="NEL", defaultUpperSlope=1.39)
+params_btx = run_loudness_fit(measured_data_jittered, fit_mode="BTX", optAlg="NEL", defaultUpperSlope=1.39)
 
 print("BTUX params [Lcut, m_low, m_high]:", params_btux)
 print("BTX params  [Lcut, m_low, m_high]:", params_btx)
 
 x_fit = np.linspace(levels_jittered.min(), 100, 400)
-y_btux = loudness_function_Lcut(x_fit, params_btux)
-y_btx = loudness_function_Lcut(x_fit, params_btx)
+y_btux = evaluate_loudness_fixed_lcut(x_fit, params_btux)
+y_btx = evaluate_loudness_fixed_lcut(x_fit, params_btx)
 
 x_btux, y_btux = truncate_to_50_cu(x_fit, y_btux)
 x_btx, y_btx = truncate_to_50_cu(x_fit, y_btx)
@@ -60,8 +60,8 @@ x_btx, y_btx = truncate_to_50_cu(x_fit, y_btx)
 
 plt.figure(figsize=(7, 5))
 plt.scatter(levels_jittered, cu, label="data points", zorder=3, color="tab:blue")
-plt.plot(x_btux, y_btux, label="BTUX fit", linewidth=2, color="tab:orange")
-plt.plot(x_btx, y_btx, label="BTX fit", linewidth=2, color="tab:green")
+plt.plot(x_btux, y_btux,label="BTUX fit", linewidth=2, color="tab:orange")
+plt.plot(x_btx, y_btx,'--', label="BTX fit", linewidth=2, color="tab:green")
 plt.xlabel("Level (dB SPL)")
 plt.ylabel("Categorical Units (CU)")
 plt.title("Loudness Function Fits (BTUX vs BTX)")
