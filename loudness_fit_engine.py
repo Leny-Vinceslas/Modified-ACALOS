@@ -23,7 +23,7 @@ DOI: 10.1016/j.heares.2014.07.003
 
 ------------------------------------------------------------------------------
 This is an experimental implementation of the above-mentioned publication.
-It is not part of the original reference software and are not supported by the original authors.
+It is not part of the original reference software and is not supported by the original publication's authors.
 ------------------------------------------------------------------------------
 '''
 
